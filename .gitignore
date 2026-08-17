@@ -1,0 +1,46 @@
+# ---- Go 编译产物 ----
+# 二进制可执行文件（与目录名或模块名同名）
+/rag-bot-client
+/rag-bot-client.exe
+*.exe
+*.test
+*.out
+
+# ---- Go 工具链 ----
+# 覆盖率/性能分析
+*.prof
+*.pprof
+
+# ---- 依赖与构建缓存 ----
+/vendor/
+
+# ---- 环境变量与敏感配置 ----
+.env
+.env.*
+!.env.example
+*.local
+
+# ---- 日志文件 ----
+*.log
+logs/
+
+# ---- IDE / 编辑器 ----
+# VS Code
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.iml
+*.swp
+*~
+
+# ---- 操作系统 ----
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ---- 临时文件 ----
+tmp/
+temp/
+*.tmp
+*.bak
