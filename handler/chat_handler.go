@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"rag-bot-client/client"
+	"rag-bot-client/model"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -44,4 +46,29 @@ func (h *RAGHandler) ListHistory(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+func (h *RAGHandler) Ask(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	var req model.RAGQueryRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		BadRequest(c, err)
+		return
+	}
+	if req.Question == "" {
+		BadRequest(c, errors.New("question 不能为空"))
+		return
+	}
+
+	resp, err := h.rag_client.Ask(ctx, req.Question)
+	if err != nil {
+		HandleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func (h *RAGHandler) NewConversation(c *gin.Context) {
+
 }

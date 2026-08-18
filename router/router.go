@@ -11,6 +11,7 @@ func SetupRouter(h *handler.RAGHandler) *gin.Engine {
 	api := r.Group("/api/v1")
 	{
 		api.GET("/history", h.ListHistory)
+		api.POST("/ask", h.Ask)
 	}
 	return r
 }

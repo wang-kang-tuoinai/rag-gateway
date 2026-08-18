@@ -9,7 +9,7 @@ type RAGReference struct {
 	Topic  string `json:"topic"`
 }
 
-type RagQueryResponse struct {
+type RAGQueryResponse struct {
 	Answer         string         `json:"answer"`
 	ConversationID string         `json:"conversation_id"`
 	References     []RAGReference `json:"references"`
