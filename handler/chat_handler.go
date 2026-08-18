@@ -35,7 +35,7 @@ func (h *RAGHandler) ListHistory(c *gin.Context) {
 	}
 	var cursor *int64
 	if cursorStr != "" {
-		if v, err := strconv.ParseInt(cursorStr, 10, 64); err == nil {
+		if v, err := strconv.ParseInt(cursorStr, 10, 64); err == nil && v > 0 {
 			cursor = &v
 		}
 	}
@@ -50,6 +50,7 @@ func (h *RAGHandler) ListHistory(c *gin.Context) {
 
 func (h *RAGHandler) Ask(c *gin.Context) {
 	ctx := c.Request.Context()
+	conversationID := c.Param("conversation_id") // /ask 时为空，/conversations/:id/ask 时非空
 
 	var req model.RAGQueryRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -61,7 +62,7 @@ func (h *RAGHandler) Ask(c *gin.Context) {
 		return
 	}
 
-	resp, err := h.rag_client.Ask(ctx, req.Question)
+	resp, err := h.rag_client.Ask(ctx, req.Question, conversationID)
 	if err != nil {
 		HandleError(c, err)
 		return
@@ -69,6 +70,3 @@ func (h *RAGHandler) Ask(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-func (h *RAGHandler) NewConversation(c *gin.Context) {
-
-}

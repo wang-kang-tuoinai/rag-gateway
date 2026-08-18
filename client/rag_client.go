@@ -24,6 +24,28 @@ func NewRAGClient(baseURL string) *RAGClient {
 	}
 }
 
+// HTTPError 表示 RAG 服务返回的非 2xx 响应，携带状态码便于上层区分处理。
+type HTTPError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("HTTP %d: %s", e.StatusCode, e.Message)
+}
+
+// newHTTPError 从响应构造带状态码的错误，优先解析 FastAPI 的 {"detail": "..."}。
+func newHTTPError(resp *http.Response) error {
+	msg := resp.Status
+	var detail struct {
+		Detail string `json:"detail"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&detail); err == nil && detail.Detail != "" {
+		msg = detail.Detail
+	}
+	return &HTTPError{StatusCode: resp.StatusCode, Message: msg}
+}
+
 func (c *RAGClient) ListHistory(ctx context.Context, limit int, cursor *int64) (*model.ListHistoryResponse, error) {
 	u, err := url.Parse(c.baseURL)
 	if err != nil {
@@ -49,7 +71,7 @@ func (c *RAGClient) ListHistory(ctx context.Context, limit int, cursor *int64) (
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
+		return nil, newHTTPError(resp)
 	}
 
 	var out model.ListHistoryResponse
@@ -59,12 +81,16 @@ func (c *RAGClient) ListHistory(ctx context.Context, limit int, cursor *int64) (
 	return &out, nil
 }
 
-func (c *RAGClient) Ask(ctx context.Context, question string) (*model.RAGQueryResponse, error) {
+func (c *RAGClient) Ask(ctx context.Context, question string, conversationID string) (*model.RAGQueryResponse, error) {
 	u, err := url.Parse(c.baseURL)
 	if err != nil {
 		return nil, err
 	}
-	u = u.JoinPath("api", "v1", "ask")
+	if conversationID == "" {
+		u = u.JoinPath("api", "v1", "ask")
+	} else {
+		u = u.JoinPath("api", "v1", "conversations", conversationID, "ask")
+	}
 
 	body, err := json.Marshal(model.RAGQueryRequest{Question: question})
 	if err != nil {
@@ -84,7 +110,7 @@ func (c *RAGClient) Ask(ctx context.Context, question string) (*model.RAGQueryRe
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
+		return nil, newHTTPError(resp)
 	}
 
 	var out model.RAGQueryResponse
