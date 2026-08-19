@@ -69,4 +69,3 @@ func (h *RAGHandler) Ask(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, resp)
 }
-

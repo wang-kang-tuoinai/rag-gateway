@@ -10,6 +10,8 @@ import (
 	"rag-bot-client/model"
 	"strconv"
 	"time"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 type RAGClient struct {
@@ -20,7 +22,10 @@ type RAGClient struct {
 func NewRAGClient(baseURL string) *RAGClient {
 	return &RAGClient{
 		baseURL: baseURL,
-		client:  &http.Client{Timeout: 30 * time.Second},
+		client: &http.Client{
+			Transport: otelhttp.NewTransport(http.DefaultTransport),
+			Timeout:   30 * time.Second,
+		},
 	}
 }
 
@@ -51,7 +56,7 @@ func (c *RAGClient) ListHistory(ctx context.Context, limit int, cursor *int64) (
 	if err != nil {
 		return nil, err
 	}
-	u = u.JoinPath("api", "v1", "history")
+	u = u.JoinPath("api", "v1", "history/")
 
 	q := u.Query()
 	q.Set("limit", strconv.Itoa(limit))

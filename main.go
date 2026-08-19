@@ -12,15 +12,35 @@ import (
 	"rag-bot-client/router"
 	"syscall"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/resource"
+	"go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.30.0"
 )
 
 func main() {
+	//初始化Tracer
+	tp, err := initTracer()
+	if err != nil {
+		log.Fatal("初始化Tracer失败:", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := tp.Shutdown(ctx); err != nil {
+			log.Println("关闭Trace超时或失败:", err)
+		}
+	}()
 	ragServiceURL := getEnv("RAG_SERVICE_URL", "http://localhost:8000")
 	ragClient := client.NewRAGClient(ragServiceURL)
 	ragHandler := handler.NewRAGHandler(ragClient)
 	r := router.SetupRouter(ragHandler)
+	port := getEnv("PORT", "8081")
 	srv := &http.Server{
-		Addr:    ":8080",
+		Addr:    ":" + port,
 		Handler: r,
 	}
 	srvErr := make(chan error, 1)
@@ -51,4 +71,35 @@ func getEnv(key, defaultVal string) string {
 		return v
 	}
 	return defaultVal
+}
+
+func initTracer() (*trace.TracerProvider, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	//创建OTLP HTTP Exporter
+	exporter, err := otlptracehttp.New(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	//定义当前服务的资源属性
+	res, err := resource.New(ctx, resource.WithAttributes(
+		semconv.ServiceName("rag-bot"),
+	))
+	if err != nil {
+		return nil, err
+	}
+	tp := trace.NewTracerProvider(
+		trace.WithBatcher(exporter),
+		trace.WithResource(res),
+	)
+	otel.SetTracerProvider(tp)
+	// 设置全局propagator，靠他往header里写trace信息
+	otel.SetTextMapPropagator(
+		propagation.NewCompositeTextMapPropagator(
+			propagation.TraceContext{},
+			propagation.Baggage{},
+		),
+	)
+	return tp, nil
 }
