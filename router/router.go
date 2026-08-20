@@ -10,6 +10,11 @@ import (
 func SetupRouter(h *handler.RAGHandler) *gin.Engine {
 	r := gin.Default()
 	r.Use(otelgin.Middleware("rag-bot"))
+
+	// 托管前端静态文件
+	r.Static("/static", "./static")
+	r.StaticFile("/", "./static/index.html")
+
 	api := r.Group("/api/v1")
 	{
 		api.GET("/history", h.ListHistory)
