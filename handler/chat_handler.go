@@ -69,3 +69,32 @@ func (h *RAGHandler) Ask(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, resp)
 }
+
+func (h *RAGHandler) ListMessages(c *gin.Context) {
+	ctx := c.Request.Context()
+	conversationID := c.Param("conversation_id")
+
+	limitStr := c.Query("limit")
+	cursorStr := c.Query("cursor")
+
+	limit, err := strconv.Atoi(limitStr)
+	if err != nil || limit < 1 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	var cursor *int64
+	if cursorStr != "" {
+		if v, err := strconv.ParseInt(cursorStr, 10, 64); err == nil && v > 0 {
+			cursor = &v
+		}
+	}
+
+	resp, err := h.rag_client.ListMessages(ctx, conversationID, limit, cursor)
+	if err != nil {
+		HandleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}

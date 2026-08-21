@@ -50,26 +50,27 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // --- Storage Helper Functions ---
+  // 使用 sessionStorage：Tab/窗口关闭时自动清空，同一 Tab 内刷新仍保留
   function saveActiveConversation(id, title) {
     if (id) {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
           id: id,
           title: title || `会话 ${id.substring(0, 8)}`
         }));
       } catch (e) {
-        console.warn('Unable to write active conversation to localStorage:', e);
+        console.warn('Unable to write active conversation to sessionStorage:', e);
       }
     } else {
       try {
-        localStorage.removeItem(STORAGE_KEY);
+        sessionStorage.removeItem(STORAGE_KEY);
       } catch (e) {}
     }
   }
 
   function getStoredActiveConversation() {
     try {
-      const data = localStorage.getItem(STORAGE_KEY);
+      const data = sessionStorage.getItem(STORAGE_KEY);
       return data ? JSON.parse(data) : null;
     } catch (e) {
       return null;
@@ -182,6 +183,189 @@ document.addEventListener('DOMContentLoaded', () => {
     loadHistory(true);
   });
 
+  // --- Messages Loading State ---
+  let messagesCursor = null;
+  let hasMoreMessages = false;
+  let isLoadingMessages = false;
+
+  // Scroll-to-top: auto-load older messages
+  messagesContainerEl.addEventListener('scroll', () => {
+    if (
+      messagesContainerEl.scrollTop <= 50 &&
+      hasMoreMessages &&
+      !isLoadingMessages &&
+      currentConversationId
+    ) {
+      loadMoreMessages(currentConversationId);
+    }
+  });
+
+  async function loadConversationMessages(convId) {
+    // Reset state
+    messagesCursor = null;
+    hasMoreMessages = false;
+    messagesContainerEl.innerHTML = '';
+    welcomeScreenEl.style.display = 'none';
+    isLoadingMessages = true;
+
+    try {
+      const res = await fetch(`/api/v1/conversations/${encodeURIComponent(convId)}/messages?limit=40`);
+
+      // 会话不存在（未迁移或已删除）：清空状态，回退到欢迎页
+      if (res.status === 404) {
+        console.warn(`Conversation ${convId} not found, resetting to welcome screen`);
+        currentConversationId = null;
+        saveActiveConversation(null);
+        currentChatTitleEl.textContent = '新会话';
+        currentChatIdEl.textContent = 'ID: new';
+        messagesContainerEl.innerHTML = '';
+        messagesContainerEl.appendChild(welcomeScreenEl);
+        welcomeScreenEl.style.display = 'block';
+        document.querySelectorAll('.history-item').forEach(item => item.classList.remove('active'));
+        return;
+      }
+
+      if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
+
+      const data = await res.json();
+      messagesCursor = data.next_cursor;
+      hasMoreMessages = data.has_more;
+
+      // API returns newest-first; reverse to render chronologically (oldest on top)
+      const chronological = (data.items || []).slice().reverse();
+      chronological.forEach(msg => {
+        renderHistoryMessage(msg);
+      });
+
+      scrollToBottom();
+    } catch (err) {
+      console.error('Failed to load messages:', err);
+      appendSystemNotice(`加载消息失败: ${err.message}`);
+    } finally {
+      isLoadingMessages = false;
+    }
+  }
+
+  async function loadMoreMessages(convId) {
+    if (!messagesCursor || isLoadingMessages) return;
+    isLoadingMessages = true;
+
+    // Remember scroll position to maintain view after prepending
+    const prevScrollHeight = messagesContainerEl.scrollHeight;
+    const prevScrollTop = messagesContainerEl.scrollTop;
+
+    try {
+      const res = await fetch(
+        `/api/v1/conversations/${encodeURIComponent(convId)}/messages?limit=20&cursor=${messagesCursor}`
+      );
+      if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
+
+      const data = await res.json();
+      messagesCursor = data.next_cursor;
+      hasMoreMessages = data.has_more;
+
+      // API returns newest-first; reverse to chronological order, then prepend
+      const chronological = (data.items || []).slice().reverse();
+      const fragment = document.createDocumentFragment();
+      chronological.forEach(msg => {
+        const el = createHistoryMessageElement(msg);
+        fragment.appendChild(el);
+      });
+
+      messagesContainerEl.insertBefore(fragment, messagesContainerEl.firstChild);
+
+      // Restore scroll position so the user doesn't jump
+      const newScrollHeight = messagesContainerEl.scrollHeight;
+      messagesContainerEl.scrollTop = prevScrollTop + (newScrollHeight - prevScrollHeight);
+    } catch (err) {
+      console.error('Failed to load more messages:', err);
+    } finally {
+      isLoadingMessages = false;
+    }
+  }
+
+  function renderHistoryMessage(msg) {
+    const el = createHistoryMessageElement(msg);
+    messagesContainerEl.appendChild(el);
+  }
+
+  function createHistoryMessageElement(msg) {
+    if (msg.role === 'user') {
+      const row = document.createElement('div');
+      row.className = 'message-row user';
+      row.innerHTML = `
+        <div class="message-content">
+          <div class="message-bubble">${escapeHtml(msg.content)}</div>
+        </div>
+        <div class="avatar">You</div>
+      `;
+      return row;
+    } else {
+      const row = document.createElement('div');
+      row.className = 'message-row bot';
+
+      // Parse answer markdown
+      let rawHtml = '';
+      if (window.marked) {
+        rawHtml = marked.parse(msg.content);
+      } else {
+        rawHtml = `<p>${escapeHtml(msg.content)}</p>`;
+      }
+
+      let sanitizedHtml = rawHtml;
+      if (window.DOMPurify) {
+        sanitizedHtml = DOMPurify.sanitize(rawHtml);
+      }
+
+      // Build references
+      let refsHtml = '';
+      if (msg.references && msg.references.length > 0) {
+        const refItems = msg.references.map(ref => `
+          <div class="ref-card">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+            </svg>
+            <span class="topic-badge">${escapeHtml(ref.topic || 'doc')}</span>
+            <span>${escapeHtml(ref.source || '')}</span>
+          </div>
+        `).join('');
+
+        refsHtml = `
+          <div class="references-box">
+            <div class="references-title">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <line x1="12" y1="16" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12.01" y2="8"></line>
+              </svg>
+              参考来源 (References)
+            </div>
+            <div class="ref-cards">
+              ${refItems}
+            </div>
+          </div>
+        `;
+      }
+
+      row.innerHTML = `
+        <div class="avatar">AI</div>
+        <div class="message-content" style="width: 100%;">
+          <div class="message-bubble">${sanitizedHtml}${refsHtml}</div>
+        </div>
+      `;
+
+      // Re-apply syntax highlighting
+      if (window.hljs) {
+        row.querySelectorAll('pre code').forEach((block) => {
+          hljs.highlightElement(block);
+        });
+      }
+
+      return row;
+    }
+  }
+
   function selectConversation(id, title) {
     currentConversationId = id;
     saveActiveConversation(id, title);
@@ -196,11 +380,8 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
 
-    // Clear message container and add prompt info
-    messagesContainerEl.innerHTML = '';
-    welcomeScreenEl.style.display = 'none';
-
-    appendSystemNotice(`已切换至会话 [${id}]。您可以继续在此会话中提问。`);
+    // Load and render conversation messages
+    loadConversationMessages(id);
   }
 
   // --- Form Submission / Ask ---
@@ -442,8 +623,8 @@ document.addEventListener('DOMContentLoaded', () => {
     currentConversationId = savedConv.id;
     currentChatTitleEl.textContent = savedConv.title || '当前会话';
     currentChatIdEl.textContent = `ID: ${savedConv.id.substring(0, 8)}`;
-    welcomeScreenEl.style.display = 'none';
-    appendSystemNotice(`已自动恢复上次会话 [${savedConv.id}]。您可以继续在此会话中提问。`);
+    // Load historical messages for the restored conversation
+    loadConversationMessages(savedConv.id);
   }
 
   loadHistory(false);

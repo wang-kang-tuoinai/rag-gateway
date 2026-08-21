@@ -13,7 +13,13 @@ func SetupRouter(h *handler.RAGHandler) *gin.Engine {
 	r := gin.Default()
 	r.Use(otelgin.Middleware("rag-bot"))
 
-	// 托管前端静态文件
+	// 托管前端静态文件（对 JS/CSS 禁用强缓存，确保容器重建后浏览器拿到最新版本）
+	r.Use(func(c *gin.Context) {
+		if strings.HasPrefix(c.Request.URL.Path, "/static/") {
+			c.Header("Cache-Control", "no-cache, must-revalidate")
+		}
+		c.Next()
+	})
 	r.Static("/static", "./static")
 	r.StaticFile("/", "./static/index.html")
 
@@ -22,6 +28,7 @@ func SetupRouter(h *handler.RAGHandler) *gin.Engine {
 		api.GET("/history", h.ListHistory)
 		api.POST("/ask", h.Ask)
 		api.POST("/conversations/:conversation_id/ask", h.Ask)
+		api.GET("/conversations/:conversation_id/messages", h.ListMessages)
 	}
 
 	// 兜底策略：处理前端 SPA 路由
