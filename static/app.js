@@ -80,7 +80,13 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- Auto-resize Textarea ---
   userInputEl.addEventListener('input', () => {
     userInputEl.style.height = 'auto';
-    userInputEl.style.height = Math.min(userInputEl.scrollHeight, 160) + 'px';
+    const newHeight = Math.min(userInputEl.scrollHeight, 160);
+    userInputEl.style.height = newHeight + 'px';
+    if (userInputEl.scrollHeight > 160) {
+      userInputEl.style.overflowY = 'auto';
+    } else {
+      userInputEl.style.overflowY = 'hidden';
+    }
   });
 
   userInputEl.addEventListener('keydown', (e) => {
@@ -297,7 +303,6 @@ document.addEventListener('DOMContentLoaded', () => {
         <div class="message-content">
           <div class="message-bubble">${escapeHtml(msg.content)}</div>
         </div>
-        <div class="avatar">You</div>
       `;
       return row;
     } else {
@@ -349,7 +354,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
 
       row.innerHTML = `
-        <div class="avatar">AI</div>
         <div class="message-content" style="width: 100%;">
           <div class="message-bubble">${sanitizedHtml}${refsHtml}</div>
         </div>
@@ -393,6 +397,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Reset textarea
     userInputEl.value = '';
     userInputEl.style.height = 'auto';
+    userInputEl.style.overflowY = 'hidden';
 
     // Hide welcome screen if visible
     if (welcomeScreenEl.style.display !== 'none') {
@@ -456,7 +461,6 @@ document.addEventListener('DOMContentLoaded', () => {
       <div class="message-content">
         <div class="message-bubble">${escapeHtml(text)}</div>
       </div>
-      <div class="avatar">You</div>
     `;
     messagesContainerEl.appendChild(row);
     scrollToBottom();
@@ -467,7 +471,6 @@ document.addEventListener('DOMContentLoaded', () => {
     row.className = 'message-row bot';
     
     row.innerHTML = `
-      <div class="avatar">AI</div>
       <div class="message-content" style="width: 100%;">
         <div class="message-bubble">
           <div class="thinking-box">
