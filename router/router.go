@@ -1,16 +1,17 @@
 package router
 
 import (
+	"log"
 	"net/http"
-	"rag-bot-client/handler"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 )
 
-func SetupRouter(h *handler.RAGHandler) *gin.Engine {
-	r := gin.Default()
+func SetupRouter(agentProxy http.Handler) *gin.Engine {
+	r := gin.New()
+	r.Use(gin.Logger(), recoverRequests)
 	r.Use(otelgin.Middleware("rag-bot"))
 
 	// 托管前端静态文件（对 JS/CSS 禁用强缓存，确保容器重建后浏览器拿到最新版本）
@@ -23,13 +24,9 @@ func SetupRouter(h *handler.RAGHandler) *gin.Engine {
 	r.Static("/static", "./static")
 	r.StaticFile("/", "./static/index.html")
 
-	api := r.Group("/api/v1")
-	{
-		api.GET("/history", h.ListHistory)
-		api.POST("/ask", h.Ask)
-		api.POST("/conversations/:conversation_id/ask", h.Ask)
-		api.GET("/conversations/:conversation_id/messages", h.ListMessages)
-	}
+	// 会话 API 保留原始方法、路径、请求体与后端状态码，参数校验由 Agent 负责。
+	r.Any("/api/v1/conversations", gin.WrapH(agentProxy))
+	r.Any("/api/v1/conversations/*path", gin.WrapH(agentProxy))
 
 	// 兜底策略：处理前端 SPA 路由
 	r.NoRoute(func(c *gin.Context) {
@@ -51,4 +48,21 @@ func SetupRouter(h *handler.RAGHandler) *gin.Engine {
 		c.File("./static/index.html")
 	})
 	return r
+}
+
+func recoverRequests(c *gin.Context) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			// Gin 的默认 Recovery 会吞掉此信号；这里让 net/http 真正中止连接。
+			if recovered == http.ErrAbortHandler {
+				panic(recovered)
+			}
+			log.Printf("网关请求处理异常: %v", recovered)
+			if c.Writer.Written() {
+				panic(http.ErrAbortHandler)
+			}
+			c.AbortWithStatus(http.StatusInternalServerError)
+		}
+	}()
+	c.Next()
 }

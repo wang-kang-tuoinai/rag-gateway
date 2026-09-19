@@ -7,8 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"rag-bot-client/client"
-	"rag-bot-client/handler"
+	"rag-bot-client/proxy"
 	"rag-bot-client/router"
 	"syscall"
 	"time"
@@ -34,14 +33,16 @@ func main() {
 			log.Println("关闭Trace超时或失败:", err)
 		}
 	}()
-	ragServiceURL := getEnv("RAG_SERVICE_URL", "http://localhost:8000")
-	ragClient := client.NewRAGClient(ragServiceURL)
-	ragHandler := handler.NewRAGHandler(ragClient)
-	r := router.SetupRouter(ragHandler)
+	agentProxy, err := proxy.NewAgentProxy(getEnv("AGENT_SERVICE_URL", "http://localhost:8001"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	r := router.SetupRouter(agentProxy)
 	port := getEnv("PORT", "8081")
 	srv := &http.Server{
-		Addr:    ":" + port,
-		Handler: r,
+		Addr:              ":" + port,
+		Handler:           r,
+		ReadHeaderTimeout: 5 * time.Second,
 	}
 	srvErr := make(chan error, 1)
 	go func() {
@@ -63,6 +64,7 @@ func main() {
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Println("关闭HTTP服务失败:", err)
+		_ = srv.Close()
 	}
 }
 
