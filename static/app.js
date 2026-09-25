@@ -1,634 +1,214 @@
-/**
- * Ops Agent RAG Gateway - Frontend Client Application
- */
+import {api} from './api.mjs';
+import {readSSE, newRun, applyEvent, restoreRun} from './core.mjs';
+import {element, renderRun} from './render.mjs';
 
-document.addEventListener('DOMContentLoaded', () => {
-  // --- Global State & Constants ---
-  const STORAGE_KEY = 'ops_rag_active_conversation';
-
-  let currentConversationId = null;
-  let nextCursor = null;
-  let hasMoreHistory = false;
-  let thinkingTimer = null;
-
-  const thinkingPhrases = [
-    "Analyzing input prompt...",
-    "Embedding query vector...",
-    "Searching vector database index...",
-    "Retrieving candidate documents...",
-    "Filtering top-k relevant context...",
-    "Synthesizing knowledge context...",
-    "Generating model response...",
-    "Refining output formatting...",
-    "Finalizing response details..."
-  ];
-
-  // --- DOM Elements ---
-  const historyListEl = document.getElementById('history-list');
-  const loadMoreBtnEl = document.getElementById('load-more-btn');
-  const newChatBtnEl = document.getElementById('new-chat-btn');
-  const messagesContainerEl = document.getElementById('messages-container');
-  const welcomeScreenEl = document.getElementById('welcome-screen');
-  const currentChatTitleEl = document.getElementById('current-chat-title');
-  const currentChatIdEl = document.getElementById('current-chat-id');
-  const chatFormEl = document.getElementById('chat-form');
-  const userInputEl = document.getElementById('user-input');
-  const sendBtnEl = document.getElementById('send-btn');
-
-  // --- Configure Marked JS ---
-  if (window.marked) {
-    marked.setOptions({
-      highlight: function (code, lang) {
-        if (window.hljs) {
-          const language = hljs.getLanguage(lang) ? lang : 'plaintext';
-          return hljs.highlight(code, { language }).value;
-        }
-        return code;
-      },
-      breaks: true
-    });
+const $ = id => document.getElementById(id);
+const conversations = new Map();
+let current = null, listing = [], nextOffset = null, listLoading = false, creating = false, frame = null;
+const viewport = $('viewport');
+function remember(id) { try { id ? localStorage.setItem('ops-diagnosis:active', id) : localStorage.removeItem('ops-diagnosis:active'); } catch {} }
+function state(meta) {
+  let c = conversations.get(meta.conversation_id);
+  if (!c) {
+    c = {id: meta.conversation_id, title: meta.title || '诊断会话', runs: [], loaded: false, loading: false, before: null, more: false, streaming: false, pending: null, notice: '', draft: '', follow: true};
+    conversations.set(c.id, c);
   }
-
-  // --- Storage Helper Functions ---
-  // 使用 sessionStorage：Tab/窗口关闭时自动清空，同一 Tab 内刷新仍保留
-  function saveActiveConversation(id, title) {
-    if (id) {
-      try {
-        sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
-          id: id,
-          title: title || `会话 ${id.substring(0, 8)}`
-        }));
-      } catch (e) {
-        console.warn('Unable to write active conversation to sessionStorage:', e);
-      }
+  c.title = meta.title || c.title; return c;
+}
+function requestID() {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
+  const hex = [...bytes].map(x => x.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+function notice(c, text) { if (c) c.notice = text; if (current === c) schedule(); }
+function busy(c) { return c?.streaming || c?.runs.some(r => r.status === 'running' || r.status === 'submitting'); }
+function schedule() {
+  if (frame != null) return;
+  frame = requestAnimationFrame(() => { frame = null; render(); });
+}
+function controls() {
+  const active = busy(current);
+  $('send').hidden = !!active; $('stop').hidden = !active;
+  $('stop').disabled = !!current?.stopping;
+  $('stop').textContent = current?.stopping ? '正在停止…' : '■ 停止生成';
+  $('question').disabled = !!active || creating;
+  $('send').disabled = creating || !!current?.loading || !!current?.pending;
+  $('new-chat').disabled = creating;
+  $('composer-hint').textContent = active ? '正在诊断，可切换会话或停止生成' : 'Enter 发送 · Shift + Enter 换行';
+}
+function render() {
+  $('conversation-title').textContent = current?.title || '新建诊断';
+  $('welcome').hidden = !!current && (current.loading || current.runs.length > 0);
+  const roots = current ? current.runs.map(renderRun) : [];
+  // 复用节点，保留 details 展开状态，不按 token 重建整个消息列表。
+  const container = $('runs');
+  if (container.children.length !== roots.length || roots.some((r, i) => container.children[i] !== r)) container.replaceChildren(...roots);
+  $('older').hidden = !current || (!current.more && !current.loading);
+  $('older').disabled = !!current?.loading;
+  $('older').textContent = current?.loading ? '加载中…' : '加载更早的对话';
+  $('notice').hidden = !current?.notice;
+  $('notice-text').textContent = current?.notice || '';
+  $('retry').hidden = !current?.pending || !!current?.streaming;
+  $('check-run').hidden = !current?.runs.some(r => r.run_id && !r.done) || !!current?.streaming;
+  controls();
+  if (current?.follow) viewport.scrollTop = viewport.scrollHeight;
+  $('latest').hidden = !current || viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop < 100;
+}
+function renderList() {
+  $('conversation-list').replaceChildren();
+  for (const meta of listing) {
+    const c = state(meta), button = element('button', 'conversation');
+    button.classList.toggle('active', current?.id === c.id);
+    button.classList.toggle('live', !!busy(c));
+    button.append(element('strong', '', c.title), element('small', '', new Date(meta.updated_at).toLocaleString('zh-CN', {month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'})));
+    button.onclick = () => select(c); $('conversation-list').append(button);
+  }
+  $('more-list').hidden = nextOffset == null;
+}
+async function loadList(more = false) {
+  if (listLoading || (more && nextOffset == null)) return;
+  listLoading = true; $('refresh-list').disabled = true; $('more-list').disabled = true;
+  try {
+    const data = await api.list(more ? nextOffset : 0);
+    const merged = new Map((more ? listing : []).map(c => [c.conversation_id, c]));
+    data.items.forEach(c => merged.set(c.conversation_id, c)); listing = [...merged.values()];
+    nextOffset = data.has_more ? data.next_offset : null;
+    $('list-notice').textContent = listing.length ? '' : '还没有诊断记录'; renderList();
+  } catch (error) { $('list-notice').textContent = `会话列表加载失败：${error.message}。可点击刷新重试。`; }
+  finally { listLoading = false; $('refresh-list').disabled = false; $('more-list').disabled = false; }
+}
+function select(c) {
+  if (creating) return;
+  if (current) { current.draft = $('question').value; current.scroll = viewport.scrollTop; }
+  current = c; remember(c?.id); $('question').value = c?.draft || '';
+  $('sidebar').classList.remove('visible'); $('menu').setAttribute('aria-expanded', 'false');
+  render(); renderList();
+  if (c && !c.loaded) loadHistory(c);
+  else if (c && !c.follow) viewport.scrollTop = c.scroll || 0;
+}
+async function loadHistory(c, more = false) {
+  if (c.loading || (more && !c.more)) return;
+  c.loading = true; schedule();
+  const oldHeight = viewport.scrollHeight, oldTop = viewport.scrollTop;
+  try {
+    const data = await api.history(c.id, more ? c.before : null);
+    const existing = new Set(c.runs.map(r => r.run_id));
+    const records = data.items.filter(r => !existing.has(r.run_id)).map(restoreRun);
+    c.runs = [...records, ...c.runs]; c.before = data.next_cursor; c.more = data.has_more; c.loaded = true; c.notice = '';
+    if (!more) c.follow = true;
+    c.loading = false;
+    if (current === c) {
+      render();
+      if (more) { c.follow = false; viewport.scrollTop = oldTop + viewport.scrollHeight - oldHeight; }
+    }
+    if (c.runs.some(r => !r.done) && !c.streaming) notice(c, '此会话有未结束的执行，可刷新状态或停止生成。');
+  } catch (error) {
+    notice(c, error.status === 404 ? '这个会话不存在，请新建诊断。' : `历史加载失败：${error.message}。重新选择此会话可重试。`);
+  } finally { c.loading = false; schedule(); }
+}
+function replaceRun(c, old, record) {
+  const restored = restoreRun(record), index = c.runs.indexOf(old);
+  const duplicate = c.runs.find(r => r !== old && r.run_id === record.run_id);
+  if (duplicate) c.runs.splice(c.runs.indexOf(duplicate), 1);
+  const at = c.runs.indexOf(old);
+  if (at >= 0) c.runs[at] = restored; else if (index < 0) c.runs.push(restored);
+  return restored;
+}
+async function reconcile(c, run) {
+  const record = await api.run(c.id, run.run_id);
+  const restored = replaceRun(c, run, record);
+  if (c.pending?.run === run) c.pending = null;
+  if (record.status === 'running') notice(c, '执行仍在进行中，可稍后刷新状态或停止生成。');
+  else notice(c, '');
+  schedule(); return restored;
+}
+async function send(c, pending) {
+  const run = pending.run; c.pending = pending; c.streaming = true; c.stopping = false; c.notice = ''; c.follow = true;
+  run.status = 'submitting'; c.controller = new AbortController(); schedule(); renderList();
+  try {
+    const response = await api.ask(c.id, pending.question, pending.requestId, c.controller.signal);
+    run.run_id = response.headers.get('X-Run-ID'); run.status = 'running';
+    if (!response.headers.get('Content-Type')?.includes('text/event-stream')) throw new Error('返回格式不是事件流');
+    if (c.stopping && run.run_id) void stop(c);
+    await readSSE(response.body, event => {
+      if (event.conversation_id && event.conversation_id !== c.id) throw new Error('事件会话不匹配');
+      applyEvent(run, event); schedule();
+    });
+    if (!run.done) throw new Error('连接已结束，尚未收到完成状态');
+    c.pending = null;
+  } catch (error) {
+    if (error.status === 409 && error.runId) {
+      run.run_id = error.runId;
+      try { await reconcile(c, run); c.pending = null; notice(c, '已读取服务器上的原执行记录，未重复生成。'); }
+      catch (lookupError) { run.status = 'unknown'; notice(c, `提交状态待确认：${lookupError.message}`); }
+    } else if (run.run_id) {
+      try { await reconcile(c, run); c.pending = null; }
+      catch (lookupError) { run.status = 'unknown'; notice(c, `连接中断，状态查询失败：${lookupError.message}。请刷新执行状态。`); c.pending = null; }
+    } else if (error.status && error.status < 500) {
+      run.status = 'failed'; run.done = true; run.error = error.message; c.pending = null;
     } else {
-      try {
-        sessionStorage.removeItem(STORAGE_KEY);
-      } catch (e) {}
+      run.status = 'unknown'; notice(c, `尚未确认是否提交成功：${error.message}。重试会复用本次提交标识。`);
     }
+  } finally {
+    c.streaming = false; c.stopping = false; c.controller = null;
+    schedule(); renderList(); void loadList();
   }
-
-  function getStoredActiveConversation() {
+}
+async function stop(c) {
+  const run = c.runs.findLast(r => !r.done && r.run_id);
+  c.stopping = true; schedule();
+  if (!run) return; // 响应头到达后 send 会继续提交停止请求。
+  try {
+    const record = await api.cancel(c.id, run.run_id);
+    // 先保存服务端结果，再断开本地流；随后 reconcile 覆盖为最终快照。
+    if (!c.streaming) replaceRun(c, run, record);
+    c.controller?.abort(); c.pending = null; notice(c, '');
+  } catch (error) { notice(c, `停止请求未确认：${error.message}。可重试停止或刷新状态。`); }
+  finally { c.stopping = false; schedule(); }
+}
+$('chat-form').addEventListener('submit', async event => {
+  event.preventDefault(); const question = $('question').value.trim();
+  if (!question || busy(current) || creating || current?.loading || current?.pending) return;
+  let c = current;
+  if (!c) {
+    creating = true; controls();
     try {
-      const data = sessionStorage.getItem(STORAGE_KEY);
-      return data ? JSON.parse(data) : null;
-    } catch (e) {
-      return null;
-    }
+      const meta = await api.create(question.slice(0, 60)); c = state(meta); c.loaded = true;
+      listing.unshift(meta); current = c; remember(c.id); renderList();
+    } catch (error) { $('list-notice').textContent = `新建会话失败：${error.message}，问题已保留。`; return; }
+    finally { creating = false; controls(); }
   }
-
-  // --- Auto-resize Textarea ---
-  userInputEl.addEventListener('input', () => {
-    userInputEl.style.height = 'auto';
-    const newHeight = Math.min(userInputEl.scrollHeight, 160);
-    userInputEl.style.height = newHeight + 'px';
-    if (userInputEl.scrollHeight > 160) {
-      userInputEl.style.overflowY = 'auto';
-    } else {
-      userInputEl.style.overflowY = 'hidden';
-    }
-  });
-
-  userInputEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      chatFormEl.dispatchEvent(new Event('submit'));
-    }
-  });
-
-  // --- Prompt Chip Click Handlers ---
-  document.querySelectorAll('.prompt-chip').forEach(chip => {
-    chip.addEventListener('click', () => {
-      const promptText = chip.getAttribute('data-prompt');
-      if (promptText) {
-        userInputEl.value = promptText;
-        userInputEl.style.height = 'auto';
-        chatFormEl.dispatchEvent(new Event('submit'));
-      }
-    });
-  });
-
-  // --- New Chat Button Handler ---
-  newChatBtnEl.addEventListener('click', () => {
-    startNewChat();
-  });
-
-  function startNewChat() {
-    currentConversationId = null;
-    saveActiveConversation(null);
-
-    currentChatTitleEl.textContent = '新会话';
-    currentChatIdEl.textContent = 'ID: new';
-    
-    // Highlight sidebar items
-    document.querySelectorAll('.history-item').forEach(item => item.classList.remove('active'));
-
-    // Clear messages and show welcome screen
-    messagesContainerEl.innerHTML = '';
-    messagesContainerEl.appendChild(welcomeScreenEl);
-    welcomeScreenEl.style.display = 'block';
-  }
-
-  // --- History List Fetching ---
-  async function loadHistory(isAppend = false) {
-    try {
-      let url = '/api/v1/history?limit=20';
-      if (isAppend && nextCursor) {
-        url += `&cursor=${nextCursor}`;
-      }
-
-      const res = await fetch(url);
-      if (!res.ok) {
-        throw new Error(`HTTP Error ${res.status}`);
-      }
-
-      const data = await res.json();
-      nextCursor = data.next_cursor;
-      hasMoreHistory = data.has_more;
-
-      if (!isAppend) {
-        historyListEl.innerHTML = '';
-      }
-
-      if (data.items && data.items.length > 0) {
-        data.items.forEach(item => {
-          const li = document.createElement('li');
-          li.className = 'history-item';
-          if (item.id === currentConversationId) {
-            li.classList.add('active');
-            if (item.title) {
-              currentChatTitleEl.textContent = item.title;
-            }
-          }
-
-          const titleText = item.title ? item.title : `会话 ${item.id.substring(0, 8)}`;
-          const timeFormatted = formatUnixTime(item.updated_at || item.created_at);
-
-          li.innerHTML = `
-            <div class="item-title">${escapeHtml(titleText)}</div>
-            <div class="item-time">${timeFormatted}</div>
-          `;
-
-          li.addEventListener('click', () => {
-            selectConversation(item.id, titleText);
-          });
-
-          historyListEl.appendChild(li);
-        });
-      } else if (!isAppend) {
-        historyListEl.innerHTML = '<li class="history-item" style="color: var(--text-dim); cursor: default;">暂无历史会话</li>';
-      }
-
-      loadMoreBtnEl.style.display = hasMoreHistory ? 'block' : 'none';
-    } catch (err) {
-      console.error('Failed to load history:', err);
-    }
-  }
-
-  loadMoreBtnEl.addEventListener('click', () => {
-    loadHistory(true);
-  });
-
-  // --- Messages Loading State ---
-  let messagesCursor = null;
-  let hasMoreMessages = false;
-  let isLoadingMessages = false;
-
-  // Scroll-to-top: auto-load older messages
-  messagesContainerEl.addEventListener('scroll', () => {
-    if (
-      messagesContainerEl.scrollTop <= 50 &&
-      hasMoreMessages &&
-      !isLoadingMessages &&
-      currentConversationId
-    ) {
-      loadMoreMessages(currentConversationId);
-    }
-  });
-
-  async function loadConversationMessages(convId) {
-    // Reset state
-    messagesCursor = null;
-    hasMoreMessages = false;
-    messagesContainerEl.innerHTML = '';
-    welcomeScreenEl.style.display = 'none';
-    isLoadingMessages = true;
-
-    try {
-      const res = await fetch(`/api/v1/conversations/${encodeURIComponent(convId)}/messages?limit=40`);
-
-      // 会话不存在（未迁移或已删除）：清空状态，回退到欢迎页
-      if (res.status === 404) {
-        console.warn(`Conversation ${convId} not found, resetting to welcome screen`);
-        currentConversationId = null;
-        saveActiveConversation(null);
-        currentChatTitleEl.textContent = '新会话';
-        currentChatIdEl.textContent = 'ID: new';
-        messagesContainerEl.innerHTML = '';
-        messagesContainerEl.appendChild(welcomeScreenEl);
-        welcomeScreenEl.style.display = 'block';
-        document.querySelectorAll('.history-item').forEach(item => item.classList.remove('active'));
-        return;
-      }
-
-      if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
-
-      const data = await res.json();
-      messagesCursor = data.next_cursor;
-      hasMoreMessages = data.has_more;
-
-      // API returns newest-first; reverse to render chronologically (oldest on top)
-      const chronological = (data.items || []).slice().reverse();
-      chronological.forEach(msg => {
-        renderHistoryMessage(msg);
-      });
-
-      scrollToBottom();
-    } catch (err) {
-      console.error('Failed to load messages:', err);
-      appendSystemNotice(`加载消息失败: ${err.message}`);
-    } finally {
-      isLoadingMessages = false;
-    }
-  }
-
-  async function loadMoreMessages(convId) {
-    if (!messagesCursor || isLoadingMessages) return;
-    isLoadingMessages = true;
-
-    // Remember scroll position to maintain view after prepending
-    const prevScrollHeight = messagesContainerEl.scrollHeight;
-    const prevScrollTop = messagesContainerEl.scrollTop;
-
-    try {
-      const res = await fetch(
-        `/api/v1/conversations/${encodeURIComponent(convId)}/messages?limit=20&cursor=${messagesCursor}`
-      );
-      if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
-
-      const data = await res.json();
-      messagesCursor = data.next_cursor;
-      hasMoreMessages = data.has_more;
-
-      // API returns newest-first; reverse to chronological order, then prepend
-      const chronological = (data.items || []).slice().reverse();
-      const fragment = document.createDocumentFragment();
-      chronological.forEach(msg => {
-        const el = createHistoryMessageElement(msg);
-        fragment.appendChild(el);
-      });
-
-      messagesContainerEl.insertBefore(fragment, messagesContainerEl.firstChild);
-
-      // Restore scroll position so the user doesn't jump
-      const newScrollHeight = messagesContainerEl.scrollHeight;
-      messagesContainerEl.scrollTop = prevScrollTop + (newScrollHeight - prevScrollHeight);
-    } catch (err) {
-      console.error('Failed to load more messages:', err);
-    } finally {
-      isLoadingMessages = false;
-    }
-  }
-
-  function renderHistoryMessage(msg) {
-    const el = createHistoryMessageElement(msg);
-    messagesContainerEl.appendChild(el);
-  }
-
-  function createHistoryMessageElement(msg) {
-    if (msg.role === 'user') {
-      const row = document.createElement('div');
-      row.className = 'message-row user';
-      row.innerHTML = `
-        <div class="message-content">
-          <div class="message-bubble">${escapeHtml(msg.content)}</div>
-        </div>
-      `;
-      return row;
-    } else {
-      const row = document.createElement('div');
-      row.className = 'message-row bot';
-
-      // Parse answer markdown
-      let rawHtml = '';
-      if (window.marked) {
-        rawHtml = marked.parse(msg.content);
-      } else {
-        rawHtml = `<p>${escapeHtml(msg.content)}</p>`;
-      }
-
-      let sanitizedHtml = rawHtml;
-      if (window.DOMPurify) {
-        sanitizedHtml = DOMPurify.sanitize(rawHtml);
-      }
-
-      // Build references
-      let refsHtml = '';
-      if (msg.references && msg.references.length > 0) {
-        const refItems = msg.references.map(ref => `
-          <div class="ref-card">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-              <polyline points="14 2 14 8 20 8"></polyline>
-            </svg>
-            <span class="topic-badge">${escapeHtml(ref.topic || 'doc')}</span>
-            <span>${escapeHtml(ref.source || '')}</span>
-          </div>
-        `).join('');
-
-        refsHtml = `
-          <div class="references-box">
-            <div class="references-title">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10"></circle>
-                <line x1="12" y1="16" x2="12" y2="12"></line>
-                <line x1="12" y1="8" x2="12.01" y2="8"></line>
-              </svg>
-              参考来源 (References)
-            </div>
-            <div class="ref-cards">
-              ${refItems}
-            </div>
-          </div>
-        `;
-      }
-
-      row.innerHTML = `
-        <div class="message-content" style="width: 100%;">
-          <div class="message-bubble">${sanitizedHtml}${refsHtml}</div>
-        </div>
-      `;
-
-      // Re-apply syntax highlighting
-      if (window.hljs) {
-        row.querySelectorAll('pre code').forEach((block) => {
-          hljs.highlightElement(block);
-        });
-      }
-
-      return row;
-    }
-  }
-
-  function selectConversation(id, title) {
-    currentConversationId = id;
-    saveActiveConversation(id, title);
-
-    currentChatTitleEl.textContent = title;
-    currentChatIdEl.textContent = `ID: ${id.substring(0, 8)}`;
-
-    document.querySelectorAll('.history-item').forEach(item => {
-      item.classList.remove('active');
-      if (item.querySelector('.item-title')?.textContent === title) {
-        item.classList.add('active');
-      }
-    });
-
-    // Load and render conversation messages
-    loadConversationMessages(id);
-  }
-
-  // --- Form Submission / Ask ---
-  chatFormEl.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const question = userInputEl.value.trim();
-    if (!question) return;
-
-    // Reset textarea
-    userInputEl.value = '';
-    userInputEl.style.height = 'auto';
-    userInputEl.style.overflowY = 'hidden';
-
-    // Hide welcome screen if visible
-    if (welcomeScreenEl.style.display !== 'none') {
-      welcomeScreenEl.style.display = 'none';
-    }
-
-    // Append User Message
-    appendUserMessage(question);
-
-    // Append Bot Loading Message with Thinking Word Carousel
-    const { botRow, wordSpan, stopThinkingAnimation } = appendBotThinkingMessage();
-
-    // Disable input controls during API request
-    setFormDisabled(true);
-
-    try {
-      let endpoint = '/api/v1/ask';
-      if (currentConversationId) {
-        endpoint = `/api/v1/conversations/${encodeURIComponent(currentConversationId)}/ask`;
-      }
-
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question })
-      });
-
-      const data = await response.json();
-      stopThinkingAnimation();
-
-      if (!response.ok) {
-        const errorMsg = data.error || '服务器请求异常';
-        renderBotError(botRow, errorMsg);
-      } else {
-        // Update conversation ID state & persist to localStorage
-        if (data.conversation_id) {
-          currentConversationId = data.conversation_id;
-          saveActiveConversation(data.conversation_id, question);
-          currentChatIdEl.textContent = `ID: ${data.conversation_id.substring(0, 8)}`;
-        }
-
-        renderBotResponse(botRow, data.answer, data.references);
-        
-        // Refresh sidebar history list
-        loadHistory(false);
-      }
-    } catch (err) {
-      stopThinkingAnimation();
-      renderBotError(botRow, `网络错误: ${err.message}`);
-    } finally {
-      setFormDisabled(false);
-    }
-  });
-
-  // --- UI Helper Functions ---
-
-  function appendUserMessage(text) {
-    const row = document.createElement('div');
-    row.className = 'message-row user';
-    row.innerHTML = `
-      <div class="message-content">
-        <div class="message-bubble">${escapeHtml(text)}</div>
-      </div>
-    `;
-    messagesContainerEl.appendChild(row);
-    scrollToBottom();
-  }
-
-  function appendBotThinkingMessage() {
-    const row = document.createElement('div');
-    row.className = 'message-row bot';
-    
-    row.innerHTML = `
-      <div class="message-content" style="width: 100%;">
-        <div class="message-bubble">
-          <div class="thinking-box">
-            <div class="spinner-icon"></div>
-            <div class="carousel-text-wrapper">
-              <span class="carousel-word" id="thinking-word">${thinkingPhrases[0]}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-
-    messagesContainerEl.appendChild(row);
-    scrollToBottom();
-
-    const wordEl = row.querySelector('#thinking-word');
-    let phraseIdx = 0;
-
-    const timer = setInterval(() => {
-      phraseIdx = (phraseIdx + 1) % thinkingPhrases.length;
-      wordEl.style.animation = 'none';
-      void wordEl.offsetHeight; // trigger reflow
-      wordEl.textContent = thinkingPhrases[phraseIdx];
-      wordEl.style.animation = 'slideWord 0.4s ease-out';
-    }, 1200);
-
-    return {
-      botRow: row,
-      wordSpan: wordEl,
-      stopThinkingAnimation: () => clearInterval(timer)
-    };
-  }
-
-  function renderBotResponse(botRow, answer, references) {
-    const bubbleEl = botRow.querySelector('.message-bubble');
-    
-    // Parse Markdown
-    let rawHtml = '';
-    if (window.marked) {
-      rawHtml = marked.parse(answer);
-    } else {
-      rawHtml = `<p>${escapeHtml(answer)}</p>`;
-    }
-
-    // Anti-XSS Sanitization via DOMPurify
-    let sanitizedHtml = rawHtml;
-    if (window.DOMPurify) {
-      sanitizedHtml = DOMPurify.sanitize(rawHtml);
-    }
-
-    // Build References Section if available
-    let refsHtml = '';
-    if (references && Array.isArray(references) && references.length > 0) {
-      const refItems = references.map(ref => `
-        <div class="ref-card">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-            <polyline points="14 2 14 8 20 8"></polyline>
-          </svg>
-          <span class="topic-badge">${escapeHtml(ref.topic || 'doc')}</span>
-          <span>${escapeHtml(ref.source || '')}</span>
-        </div>
-      `).join('');
-
-      refsHtml = `
-        <div class="references-box">
-          <div class="references-title">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="10"></circle>
-              <line x1="12" y1="16" x2="12" y2="12"></line>
-              <line x1="12" y1="8" x2="12.01" y2="8"></line>
-            </svg>
-            参考来源 (References)
-          </div>
-          <div class="ref-cards">
-            ${refItems}
-          </div>
-        </div>
-      `;
-    }
-
-    bubbleEl.innerHTML = sanitizedHtml + refsHtml;
-    
-    // Re-apply highlight.js syntax highlighting if present
-    if (window.hljs) {
-      bubbleEl.querySelectorAll('pre code').forEach((block) => {
-        hljs.highlightElement(block);
-      });
-    }
-
-    scrollToBottom();
-  }
-
-  function renderBotError(botRow, errorText) {
-    const bubbleEl = botRow.querySelector('.message-bubble');
-    bubbleEl.innerHTML = `
-      <div style="color: #f87171; display: flex; align-items: center; gap: 8px;">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="10"></circle>
-          <line x1="12" y1="8" x2="12" y2="12"></line>
-          <line x1="12" y1="16" x2="12.01" y2="16"></line>
-        </svg>
-        <span>提问失败：${escapeHtml(errorText)}</span>
-      </div>
-    `;
-    scrollToBottom();
-  }
-
-  function appendSystemNotice(msg) {
-    const div = document.createElement('div');
-    div.style.cssText = 'text-align: center; font-size: 0.8rem; color: var(--text-dim); margin: 12px 0;';
-    div.textContent = msg;
-    messagesContainerEl.appendChild(div);
-    scrollToBottom();
-  }
-
-  function setFormDisabled(disabled) {
-    userInputEl.disabled = disabled;
-    sendBtnEl.disabled = disabled;
-  }
-
-  function scrollToBottom() {
-    messagesContainerEl.scrollTop = messagesContainerEl.scrollHeight;
-  }
-
-  function formatUnixTime(ts) {
-    if (!ts) return '';
-    const date = new Date(ts * 1000);
-    return date.toLocaleString('zh-CN', {
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-  }
-
-  function escapeHtml(str) {
-    if (!str) return '';
-    return str.replace(/[&<>"']/g, (m) => {
-      return {
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        "'": '&#39;'
-      }[m];
-    });
-  }
-
-  // --- Initial Load ---
-  const savedConv = getStoredActiveConversation();
-  if (savedConv && savedConv.id) {
-    currentConversationId = savedConv.id;
-    currentChatTitleEl.textContent = savedConv.title || '当前会话';
-    currentChatIdEl.textContent = `ID: ${savedConv.id.substring(0, 8)}`;
-    // Load historical messages for the restored conversation
-    loadConversationMessages(savedConv.id);
-  }
-
-  loadHistory(false);
+  const run = newRun(question); c.runs.push(run); c.draft = ''; $('question').value = ''; $('question').style.height = '';
+  void send(c, {question, requestId: requestID(), run});
 });
+$('question').addEventListener('keydown', event => {
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) { event.preventDefault(); $('chat-form').requestSubmit(); }
+});
+$('question').addEventListener('input', () => { $('question').style.height = 'auto'; $('question').style.height = `${Math.min($('question').scrollHeight, 180)}px`; });
+$('new-chat').onclick = () => select(null);
+$('stop').onclick = () => current && stop(current);
+$('retry').onclick = () => { if (current?.pending && !current.streaming) void send(current, current.pending); };
+$('check-run').onclick = async () => {
+  const c = current; $('check-run').disabled = true;
+  try { for (const run of [...c.runs]) if (run.run_id && !run.done) await reconcile(c, run); }
+  catch (error) { notice(c, `状态查询失败：${error.message}`); }
+  finally { $('check-run').disabled = false; renderList(); }
+};
+$('refresh-list').onclick = () => loadList(); $('more-list').onclick = () => loadList(true);
+$('older').onclick = () => current && loadHistory(current, true);
+viewport.addEventListener('scroll', () => {
+  if (!current) return;
+  current.follow = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop < 100;
+  $('latest').hidden = current.follow;
+});
+$('latest').onclick = () => { if (current) current.follow = true; viewport.scrollTop = viewport.scrollHeight; $('latest').hidden = true; };
+$('menu').onclick = () => { const open = $('sidebar').classList.toggle('visible'); $('menu').setAttribute('aria-expanded', String(open)); };
+$('close-reference').onclick = () => $('reference-dialog').close();
+$('reference-dialog').onclick = event => { if (event.target === $('reference-dialog')) { const r = event.target.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) event.target.close(); } };
+document.querySelectorAll('[data-prompt]').forEach(button => { button.onclick = () => { if (busy(current)) return; $('question').value = button.dataset.prompt; $('question').focus(); }; });
+await loadList();
+let saved; try { saved = localStorage.getItem('ops-diagnosis:active'); } catch {}
+if (saved && /^[a-f0-9-]{36}$/i.test(saved)) select(state(listing.find(c => c.conversation_id === saved) || {conversation_id: saved}));
+else render();

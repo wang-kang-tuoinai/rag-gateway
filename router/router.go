@@ -2,6 +2,7 @@ package router
 
 import (
 	"log"
+	"mime"
 	"net/http"
 	"strings"
 
@@ -10,6 +11,8 @@ import (
 )
 
 func SetupRouter(agentProxy http.Handler) *gin.Engine {
+	// Windows 的系统 MIME 表不一定包含 .mjs；ES 模块要求 JavaScript MIME。
+	_ = mime.AddExtensionType(".mjs", "text/javascript; charset=utf-8")
 	r := gin.New()
 	r.Use(gin.Logger(), recoverRequests)
 	r.Use(otelgin.Middleware("rag-bot"))

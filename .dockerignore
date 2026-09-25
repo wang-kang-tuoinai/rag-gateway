@@ -10,6 +10,8 @@ docker-compose*.yml
 
 # Documentation
 *.md
+!static/vendor/*.md
+tests/
 
 # Environment / secrets
 .env

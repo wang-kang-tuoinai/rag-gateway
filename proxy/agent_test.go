@@ -158,6 +158,8 @@ func TestRoutesAndStaticFiles(t *testing.T) {
 	}{
 		{"GET", "/", 200, false},
 		{"GET", "/static/app.js", 200, false},
+		{"GET", "/static/core.mjs", 200, false},
+		{"GET", "/static/vendor/purify.min.js", 200, false},
 		{"GET", "/api/v1/conversations?offset=20", 204, true},
 		{"POST", "/api/v1/conversations", 204, true},
 		{"GET", "/api/v1/conversations/c/runs/r", 204, true},
@@ -176,6 +178,9 @@ func TestRoutesAndStaticFiles(t *testing.T) {
 		res.Body.Close()
 		if res.StatusCode != tc.status || (res.Header.Get("X-Proxied") == "yes") != tc.proxied {
 			t.Errorf("%s %s: unexpected response %d", tc.method, tc.path, res.StatusCode)
+		}
+		if strings.HasSuffix(tc.path, ".mjs") && !strings.Contains(res.Header.Get("Content-Type"), "javascript") {
+			t.Errorf("module served with wrong MIME type: %s", res.Header.Get("Content-Type"))
 		}
 	}
 }
