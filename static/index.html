@@ -4,6 +4,7 @@
   <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Ops Agent · 运维诊断</title>
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/trace-panel.css">
   <script defer src="/static/vendor/marked.umd.js"></script>
   <script defer src="/static/vendor/purify.min.js"></script>
   <script type="module" src="/static/app.js"></script>
@@ -19,9 +20,37 @@
     <div class="sidebar-footer"><span class="small-mark">◈</span><div>从现象到证据<small>日志 · 链路 · 运维知识</small></div></div>
   </aside>
   <main>
-    <header class="topbar"><button class="menu-button" id="menu" aria-label="展开会话列表" aria-expanded="false">☰</button><div><span class="eyebrow">诊断会话</span><h1 id="conversation-title">新建诊断</h1></div><span class="top-tag">只读观测</span></header>
+    <header class="topbar"><button class="menu-button" id="menu" aria-label="展开会话列表" aria-expanded="false">☰</button><div><span class="eyebrow">诊断会话</span><h1 id="conversation-title">新建诊断</h1></div><div class="top-actions"><button id="trace-toggle" class="trace-toggle" aria-expanded="false" aria-controls="trace-panel">Trace 面板</button><span class="top-tag">只读观测</span></div></header>
     <div class="notice" id="notice" role="status" hidden><span id="notice-text"></span><button class="text-button" id="retry" hidden>重试本次提交</button><button class="text-button" id="check-run" hidden>刷新执行状态</button></div>
-    <section class="viewport" id="viewport" aria-label="诊断消息"><div class="chat-width">
+    <section class="viewport" id="viewport" aria-label="诊断工作区">
+      <section id="trace-panel" class="trace-panel" aria-label="Trace 入口耗时面板" hidden>
+        <div class="trace-heading"><div><span class="eyebrow">OBSERVE / TRACES</span><h2>请求的变化，一眼可见。</h2><p>从入口耗时与状态分布中选择时间，让 Agent 继续下钻。</p></div><span id="trace-count" class="trace-count">—</span></div>
+        <form id="trace-filter" class="trace-filters">
+          <label>服务<input id="trace-service" list="trace-services" placeholder="例如 ops-agent-backend" maxlength="128" required><datalist id="trace-services"></datalist></label>
+          <label>接口<select id="trace-operation"><option value="">全部接口</option></select></label>
+          <label>观察窗口<select id="trace-mode"><option value="live">实时 · 最近 15 分钟</option><option value="history">固定历史窗口</option></select></label>
+          <button type="submit" class="trace-button">刷新</button>
+          <div id="trace-history" class="trace-history" hidden><label>开始（本地时间）<input type="datetime-local" id="trace-start" step="1"></label><label>结束（最多 15 分钟）<input type="datetime-local" id="trace-end" step="1"></label></div>
+        </form>
+        <p id="trace-directory-notice" class="trace-caption"></p>
+        <div class="trace-chart-card">
+          <div class="trace-chart-head"><strong>入口耗时分布</strong><span>横向拖动，选择诊断范围</span></div>
+          <div id="trace-legend" class="trace-legend"></div>
+          <p id="trace-state" class="trace-state" role="status">等待查询</p>
+          <canvas id="trace-canvas" aria-label="横轴为入口开始时间，纵轴为耗时。可拖动框选；键盘用户请使用下方时间输入。" role="img"></canvas>
+          <pre id="trace-tooltip" class="trace-tooltip" hidden></pre>
+          <p id="trace-updated" class="trace-caption"></p>
+        </div>
+        <p id="trace-notices" class="trace-notices" hidden></p>
+        <div class="trace-selection-card"><div class="trace-chart-head"><strong>诊断选区</strong><button type="button" class="text-button" id="trace-select-all">使用整个窗口</button></div>
+          <p id="trace-selection">拖动图表框选时间，或在下方输入范围。</p>
+          <div class="trace-selection-inputs"><label>开始<input type="datetime-local" id="trace-select-start" step="1"></label><label>结束<input type="datetime-local" id="trace-select-end" step="1"></label><button type="button" id="trace-apply-selection" class="trace-button">填入诊断范围</button><button type="button" id="trace-clear-selection" class="text-button">清除选区</button></div>
+          <p id="trace-draft-notice" role="status" class="trace-caption"></p>
+        </div>
+        <p class="trace-caption">图中展示已召回的入口样本，不代表全量流量。OK 只表示未见有效错误；空白不代表正常。接口筛选不触发更高预算补查。实时模式每 15 秒刷新，迟到数据可能在后续回查补齐。</p>
+        <details class="trace-query-details"><summary>查询范围与候选限制</summary><pre id="trace-query-details"></pre></details>
+      </section>
+      <div class="chat-width" id="chat-content">
       <button class="older-button" id="older" hidden>加载更早的对话</button>
       <div id="welcome" class="welcome"><div class="welcome-symbol">⌁</div><span class="eyebrow">OBSERVE · INVESTIGATE · EXPLAIN</span>
         <h2>让每一次诊断，<br>都有据可循。</h2><p>描述问题和时间范围，Agent 会结合日志、调用链与知识库，逐步排查异常。</p>

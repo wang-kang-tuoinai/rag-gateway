@@ -37,7 +37,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	r := router.SetupRouter(agentProxy)
+	visualProxy, err := proxy.NewObservabilityProxy(getEnv("OBS_SERVICE_URL", "http://localhost:8082"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	r := router.SetupRouter(agentProxy, visualProxy)
 	port := getEnv("PORT", "8081")
 	srv := &http.Server{
 		Addr:              ":" + port,

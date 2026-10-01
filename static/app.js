@@ -1,11 +1,22 @@
 import {api} from './api.mjs';
 import {readSSE, newRun, applyEvent, restoreRun} from './core.mjs';
 import {element, renderRun} from './render.mjs';
+import {initTracePanel} from './trace-panel.mjs';
 
 const $ = id => document.getElementById(id);
 const conversations = new Map();
 let current = null, listing = [], nextOffset = null, listLoading = false, creating = false, frame = null;
 const viewport = $('viewport');
+const tracePanel = initTracePanel({writeDraft(update) {
+  if (busy(current) || creating || current?.pending || current?.loading) return false;
+  const next = update($('question').value);
+  if (next.length > 10000) return false;
+  $('question').value = next;
+  if (current) current.draft = next;
+  $('question').dispatchEvent(new Event('input'));
+  $('question').focus();
+  return true;
+}});
 function remember(id) { try { id ? localStorage.setItem('ops-diagnosis:active', id) : localStorage.removeItem('ops-diagnosis:active'); } catch {} }
 function state(meta) {
   let c = conversations.get(meta.conversation_id);
@@ -53,7 +64,7 @@ function render() {
   $('retry').hidden = !current?.pending || !!current?.streaming;
   $('check-run').hidden = !current?.runs.some(r => r.run_id && !r.done) || !!current?.streaming;
   controls();
-  if (current?.follow) viewport.scrollTop = viewport.scrollHeight;
+  if (current?.follow && !tracePanel.isOpen()) viewport.scrollTop = viewport.scrollHeight;
   $('latest').hidden = !current || viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop < 100;
 }
 function renderList() {
@@ -79,8 +90,9 @@ async function loadList(more = false) {
   } catch (error) { $('list-notice').textContent = `会话列表加载失败：${error.message}。可点击刷新重试。`; }
   finally { listLoading = false; $('refresh-list').disabled = false; $('more-list').disabled = false; }
 }
-function select(c) {
+function select(c, preserveView = false) {
   if (creating) return;
+  if (!preserveView) tracePanel.hide();
   if (current) { current.draft = $('question').value; current.scroll = viewport.scrollTop; }
   current = c; remember(c?.id); $('question').value = c?.draft || '';
   $('sidebar').classList.remove('visible'); $('menu').setAttribute('aria-expanded', 'false');
@@ -171,6 +183,7 @@ async function stop(c) {
 $('chat-form').addEventListener('submit', async event => {
   event.preventDefault(); const question = $('question').value.trim();
   if (!question || busy(current) || creating || current?.loading || current?.pending) return;
+  tracePanel.hide();
   let c = current;
   if (!c) {
     creating = true; controls();
@@ -199,7 +212,7 @@ $('check-run').onclick = async () => {
 $('refresh-list').onclick = () => loadList(); $('more-list').onclick = () => loadList(true);
 $('older').onclick = () => current && loadHistory(current, true);
 viewport.addEventListener('scroll', () => {
-  if (!current) return;
+  if (!current || tracePanel.isOpen()) return;
   current.follow = viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop < 100;
   $('latest').hidden = current.follow;
 });
@@ -210,5 +223,5 @@ $('reference-dialog').onclick = event => { if (event.target === $('reference-dia
 document.querySelectorAll('[data-prompt]').forEach(button => { button.onclick = () => { if (busy(current)) return; $('question').value = button.dataset.prompt; $('question').focus(); }; });
 await loadList();
 let saved; try { saved = localStorage.getItem('ops-diagnosis:active'); } catch {}
-if (saved && /^[a-f0-9-]{36}$/i.test(saved)) select(state(listing.find(c => c.conversation_id === saved) || {conversation_id: saved}));
+if (saved && /^[a-f0-9-]{36}$/i.test(saved)) select(state(listing.find(c => c.conversation_id === saved) || {conversation_id: saved}), true);
 else render();

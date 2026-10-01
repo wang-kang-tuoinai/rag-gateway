@@ -23,6 +23,21 @@ const server = http.createServer(async (req, res) => {
       const content = await readFile(full);
       res.writeHead(200, {'Content-Type': ({'.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.mjs': 'text/javascript'})[path.extname(full)] || 'text/plain'}); res.end(content); return;
     }
+    if(url.pathname==='/api/v1/visual/services')return json(res,200,{services:['ops-agent-backend','gateway','offline'],default_service:'ops-agent-backend'});
+    if(url.pathname==='/api/v1/visual/traces'){
+      const service=url.searchParams.get('service'),operation=url.searchParams.get('operation')||'';
+      if(service==='offline')return json(res,502,{error:'模拟 Jaeger 查询失败'});
+      const end=+(url.searchParams.get('end_ms')||Date.now()),start=+(url.searchParams.get('start_ms')||(end-900000));
+      const operations=['GET /api/v1/users','GET /api/v1/users/:id','POST /api/v1/users','PUT /api/v1/users/:id'];
+      const points=[];const by_status={ok:0,degraded:0,failed:0};
+      for(let i=0;i<4500;i++){
+        const op=operations[i%4];if(operation&&operation!==op)continue;
+        const troubled=i>1700&&i<2900&&i%4!==0;
+        const status=troubled?(i%4===3?'failed':'degraded'):'ok';
+        points.push({trace_id:`fixture-${i}`,entry_span_id:`entry-${i}`,service,operation:op,start_ms:start+(end-start)*i/4500,duration_ms:troubled?280+(i%71)*3:3+(i%37),status,incomplete:false});by_status[status]++;
+      }
+      return json(res,200,{service,operation,window:{start_ms:start,end_ms:end},points,operations,by_status,loading:false,initialized:true,stale:false,partial:false,updated_at_ms:Date.now(),data_as_of_ms:end,notices:['预览数据：4500 个合成入口样本，未连接真实 Jaeger。'],operation_queries:operations.map(op=>({operation:op,status:'success',raw_trace_count:1125,limit_reached:false})),refresh_seconds:15,point_limit:20000});
+    }
     let body = ''; for await (const chunk of req) body += chunk;
     const data = body ? JSON.parse(body) : {};
     const parts = url.pathname.split('/').filter(Boolean), cid = parts[3], runID = parts[5];

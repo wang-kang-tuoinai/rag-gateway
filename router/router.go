@@ -10,7 +10,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 )
 
-func SetupRouter(agentProxy http.Handler) *gin.Engine {
+func SetupRouter(agentProxy http.Handler, visualProxy ...http.Handler) *gin.Engine {
 	// Windows 的系统 MIME 表不一定包含 .mjs；ES 模块要求 JavaScript MIME。
 	_ = mime.AddExtensionType(".mjs", "text/javascript; charset=utf-8")
 	r := gin.New()
@@ -30,6 +30,10 @@ func SetupRouter(agentProxy http.Handler) *gin.Engine {
 	// 会话 API 保留原始方法、路径、请求体与后端状态码，参数校验由 Agent 负责。
 	r.Any("/api/v1/conversations", gin.WrapH(agentProxy))
 	r.Any("/api/v1/conversations/*path", gin.WrapH(agentProxy))
+	if len(visualProxy) > 0 {
+		r.GET("/api/v1/visual/services", gin.WrapH(visualProxy[0]))
+		r.GET("/api/v1/visual/traces", gin.WrapH(visualProxy[0]))
+	}
 
 	// 兜底策略：处理前端 SPA 路由
 	r.NoRoute(func(c *gin.Context) {

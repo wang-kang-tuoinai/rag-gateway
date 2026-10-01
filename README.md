@@ -6,6 +6,7 @@
 | --- | --- |
 | `/`、`/static/*` | 提供前端资源 |
 | `/api/v1/conversations` 及其子路径 | 转发到 ops-diagnosis-agent，保留方法、路径、有效查询参数和请求体 |
+| `GET /api/v1/visual/services`、`GET /api/v1/visual/traces` | 转发到 obs-api，服务目录与 Trace 面板摘要 |
 | 其他 `/api/*` | 返回 404 JSON，不回退到 HTML |
 
 不在网关定义会话响应模型，也不解析、聚合或重写 SSE 事件。
@@ -83,3 +84,10 @@ node tests/preview-server.mjs
 可验证 23 轮历史分页、流式输出、引用、停止、刷新和切换会话。
 问题包含 `[响应丢失]`、`[断流]`、`[XSS]` 时可触发对应验收场景。
 该预览服务不代表已完成真实模型联调。
+## Trace 面板
+
+顶栏「Trace 面板」支持服务/接口筛选、实时最近 15 分钟、最多 15 分钟的固定历史窗口、耗时散点和拖动框选。选区会更新下方诊断草稿，保留已有问题，不自动发送。日志面板和瀑布图暂未实现。
+
+新增 `OBS_SERVICE_URL`，本地默认 `http://localhost:8082`，Compose 配置为 `http://obs-api:8081`。网关仅代理两个只读路径 `/api/v1/visual/services` 和 `/api/v1/visual/traces`，会话 SSE 代理不变。完整接口及缓存约束见 [traces-visual.md](../obs-api/docs/traces-visual.md)。
+
+验证：`go test -race ./...` 和 `node --test tests/frontend.test.mjs tests/trace-panel.test.mjs`。运行 `node tests/preview-server.mjs` 可查看含 4500 个合成点的预览（无真实 Jaeger、模型调用或数据库写入）。
