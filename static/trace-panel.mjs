@@ -9,6 +9,8 @@ export function initTracePanel({writeDraft}) {
   const request=new LatestRequest();
   const message=text=>{$('trace-state').textContent=text;};
   const mode=()=>$('trace-mode').value;
+  const serviceValue=()=>$('trace-service').value==='__manual__' ? $('trace-service-manual').value.trim() : $('trace-service').value;
+  const showManualService=()=>{$('trace-service-manual-wrap').hidden=$('trace-service').value!=='__manual__';};
   function plot() {
     if(!opened)return;
     const width=Math.max(280,canvas.getBoundingClientRect().width),height=300,dpr=window.devicePixelRatio||1;
@@ -43,7 +45,7 @@ export function initTracePanel({writeDraft}) {
   }
   async function load() {
     clearTimeout(timer); if(!opened||document.hidden)return;
-    const params=new URLSearchParams({service:$('trace-service').value.trim(),operation:$('trace-operation').value});
+    const params=new URLSearchParams({service:serviceValue(),operation:$('trace-operation').value});
     if(!params.get('service')){message('请填写或选择服务');return;}
     if(mode()==='history'){
       const start=new Date($('trace-start').value).getTime(),end=new Date($('trace-end').value).getTime();
@@ -60,20 +62,35 @@ export function initTracePanel({writeDraft}) {
   function clearData(){clearTimeout(timer);request.cancel();data=null;selected=null;hover=null;drag=null;$('trace-tooltip').hidden=true;$('trace-selection').textContent='拖动图表框选时间，或在下方输入范围。';$('trace-select-start').value='';$('trace-select-end').value='';$('trace-draft-notice').textContent='';$('trace-count').textContent='—';$('trace-legend').replaceChildren();$('trace-updated').textContent='';$('trace-notices').hidden=true;$('trace-query-details').textContent='';message('正在加载…');plot();}
   async function services(){
     if(directoryLoaded)return;directoryLoaded=true;
-    try{const res=await fetch('/api/v1/visual/services',{signal:AbortSignal.timeout(10000)});const body=await res.json();if(!res.ok)throw new Error(body.error);$('trace-services').replaceChildren(...body.services.map(name=>new Option(name,name)));$('trace-directory-notice').textContent='';if(!$('trace-service').value)$('trace-service').value=body.default_service||body.services[0]||'ops-agent-backend';}
-    catch(error){directoryLoaded=false;$('trace-directory-notice').textContent=`服务目录暂不可用，可手动输入服务名：${error.message}`;}
+    try{
+      const res=await fetch('/api/v1/visual/services',{signal:AbortSignal.timeout(10000)}),body=await res.json();
+      if(!res.ok)throw new Error(body.error);
+      const names=Array.isArray(body.services)?body.services:[],select=$('trace-service'),current=select.value;
+      select.replaceChildren(...names.map(name=>new Option(name,name)),new Option('手动输入服务名…','__manual__'));
+      select.value=current==='__manual__'||!names.length?'__manual__':names.includes(current)?current:names.includes(body.default_service)?body.default_service:names[0];
+      if(!names.length&&!$('trace-service-manual').value)$('trace-service-manual').value=body.default_service||'ops-agent-backend';
+      showManualService();
+      $('trace-directory-notice').textContent=names.length?'':'服务目录为空，可手动输入服务名。';
+    }catch(error){
+      directoryLoaded=false;
+      $('trace-service').replaceChildren(new Option('手动输入服务名…','__manual__'));
+      $('trace-service').value='__manual__';
+      if(!$('trace-service-manual').value)$('trace-service-manual').value='ops-agent-backend';
+      showManualService();
+      $('trace-directory-notice').textContent=`服务目录暂不可用，可手动输入服务名：${error.message}`;
+    }
   }
   function setOpen(value){opened=value;panel.hidden=!value;$('chat-content').hidden=value;$('trace-toggle').textContent=value?'返回对话':'Trace 面板';$('trace-toggle').setAttribute('aria-expanded',String(value));
-    if(value){if(!$('trace-service').value){message('正在读取服务目录…');void services().finally(()=>{if(!$('trace-service').value)$('trace-service').value='ops-agent-backend';if(opened)void load();});}else{void services();void load();}}else{clearTimeout(timer);request.cancel();}}
+    if(value){if(!$('trace-service').value){message('正在读取服务目录…');void services().finally(()=>{if(opened)void load();});}else{void services();void load();}}else{clearTimeout(timer);request.cancel();}}
   $('trace-toggle').onclick=()=>setOpen(!opened);
-  $('trace-filter').onsubmit=event=>{event.preventDefault();if(mode()==='history'||data?.service!==$('trace-service').value.trim()||data?.operation!==$('trace-operation').value)clearData();void load();};
+  $('trace-filter').onsubmit=event=>{event.preventDefault();if(mode()==='history'||data?.service!==serviceValue()||data?.operation!==$('trace-operation').value)clearData();void load();};
   $('trace-operation').onchange=()=>{clearData();void load();};
   $('trace-mode').onchange=()=>{$('trace-history').hidden=mode()!=='history';clearData();void load();};
-  $('trace-service').onchange=()=>{$('trace-operation').replaceChildren(new Option('全部接口',''));clearData();void load();};
-  $('trace-service').oninput=()=>{$('trace-operation').replaceChildren(new Option('全部接口',''));clearData();message('服务已更改，请点击刷新加载。');};
+  $('trace-service').onchange=()=>{showManualService();$('trace-operation').replaceChildren(new Option('全部接口',''));clearData();if(serviceValue())void load();else{$('trace-service-manual').focus();message('请输入服务名后点击刷新加载。');}};
+  $('trace-service-manual').oninput=()=>{$('trace-operation').replaceChildren(new Option('全部接口',''));clearData();message('服务已更改，请点击刷新加载。');};
   function applySelection(){
     if(!selected)return;
-    const range={...selected,service:data?.service||$('trace-service').value.trim(),operation:data?.operation||''};
+    const range={...selected,service:data?.service||serviceValue(),operation:data?.operation||''};
     $('trace-selection').textContent=`${fullTime(range.start*1000)} → ${fullTime(range.end*1000)}（${Intl.DateTimeFormat().resolvedOptions().timeZone}） · start=${range.start}, end=${range.end}`;
     $('trace-select-start').value=localInput(range.start*1000);$('trace-select-end').value=localInput(range.end*1000);
     const result=writeDraft(draft=>updateTraceDraft(draft,range));

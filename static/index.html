@@ -26,7 +26,8 @@
       <section id="trace-panel" class="trace-panel" aria-label="Trace 入口耗时面板" hidden>
         <div class="trace-heading"><div><span class="eyebrow">OBSERVE / TRACES</span><h2>请求的变化，一眼可见。</h2><p>从入口耗时与状态分布中选择时间，让 Agent 继续下钻。</p></div><span id="trace-count" class="trace-count">—</span></div>
         <form id="trace-filter" class="trace-filters">
-          <label>服务<input id="trace-service" list="trace-services" placeholder="例如 ops-agent-backend" maxlength="128" required><datalist id="trace-services"></datalist></label>
+          <label>服务<select id="trace-service" required><option value="">正在加载服务…</option></select></label>
+          <label id="trace-service-manual-wrap" hidden>手动输入服务<input id="trace-service-manual" placeholder="例如 ops-agent-backend" maxlength="128"></label>
           <label>接口<select id="trace-operation"><option value="">全部接口</option></select></label>
           <label>观察窗口<select id="trace-mode"><option value="live">实时 · 最近 15 分钟</option><option value="history">固定历史窗口</option></select></label>
           <button type="submit" class="trace-button">刷新</button>
