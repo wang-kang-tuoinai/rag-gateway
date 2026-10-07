@@ -33,6 +33,7 @@ func SetupRouter(agentProxy http.Handler, visualProxy ...http.Handler) *gin.Engi
 	if len(visualProxy) > 0 {
 		r.GET("/api/v1/visual/services", gin.WrapH(visualProxy[0]))
 		r.GET("/api/v1/visual/traces", gin.WrapH(visualProxy[0]))
+		r.GET("/api/v1/visual/logs", gin.WrapH(visualProxy[0]))
 	}
 
 	// 兜底策略：处理前端 SPA 路由

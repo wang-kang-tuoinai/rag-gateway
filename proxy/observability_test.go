@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"rag-bot-client/proxy"
 	"rag-bot-client/router"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -14,7 +15,7 @@ func TestVisualProxyPreservesQueryAndIsReadOnly(t *testing.T) {
 	var calls atomic.Int32
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		if r.URL.RequestURI() != "/api/v1/visual/traces?service=user&operation=GET+%2Fa" {
+		if r.URL.RequestURI() != "/api/v1/visual/traces?service=user&operation=GET+%2Fa" && r.URL.RequestURI() != "/api/v1/visual/logs?service=user&method=GET&route=%2Fa" {
 			t.Error(r.URL.RequestURI())
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -29,8 +30,9 @@ func TestVisualProxyPreservesQueryAndIsReadOnly(t *testing.T) {
 	r := router.SetupRouter(http.NotFoundHandler(), p)
 	gw := httptest.NewServer(r)
 	defer gw.Close()
-	for _, method := range []string{"GET", "POST"} {
-		req, err := http.NewRequest(method, gw.URL+"/api/v1/visual/traces?service=user&operation=GET+%2Fa", nil)
+	for _, scenario := range []string{"GET traces?service=user&operation=GET+%2Fa", "POST traces?service=user&operation=GET+%2Fa", "GET logs?service=user&method=GET&route=%2Fa", "POST logs?service=user&method=GET&route=%2Fa"} {
+		method, path, _ := strings.Cut(scenario, " ")
+		req, err := http.NewRequest(method, gw.URL+"/api/v1/visual/"+path, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -46,7 +48,7 @@ func TestVisualProxyPreservesQueryAndIsReadOnly(t *testing.T) {
 			t.Fatal(resp.StatusCode)
 		}
 	}
-	if calls.Load() != 1 {
+	if calls.Load() != 2 {
 		t.Fatal("non-read request reached upstream")
 	}
 }

@@ -24,6 +24,18 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, {'Content-Type': ({'.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.mjs': 'text/javascript'})[path.extname(full)] || 'text/plain'}); res.end(content); return;
     }
     if(url.pathname==='/api/v1/visual/services')return json(res,200,{services:['ops-agent-backend','gateway','offline'],default_service:'ops-agent-backend'});
+    if(url.pathname==='/api/v1/visual/logs'){
+      const service=url.searchParams.get('service'),method=url.searchParams.get('method')||'',route=url.searchParams.get('route')||'';
+      if(service==='logs-offline')return json(res,502,{error:'模拟日志聚合失败'});
+      if(service==='loading')return json(res,200,{service,method,route,window:{start_ms:Date.now()-900000,end_ms:Date.now()},data_window:null,buckets:[],summary:null,loading:true,initialized:false,notices:[]});
+      const end=+(url.searchParams.get('end_ms')||Date.now()-5000),start=+(url.searchParams.get('start_ms')||(end-900000));
+      const buckets=[],summary={total:0,by_level:{DEBUG:0,INFO:0,WARN:0,ERROR:0}};
+      for(let ms=Math.floor(start/10000)*10000;ms<end;ms+=10000){const index=buckets.length,troubled=index>30&&index<60,empty=service==='empty';
+        const by_level={DEBUG:0,INFO:empty?0:method?6:24,WARN:empty?0:troubled?8:0,ERROR:empty?0:troubled?3:0};
+        const total=Object.values(by_level).reduce((a,b)=>a+b,0);buckets.push({start_ms:Math.max(ms,start),end_ms:Math.min(ms+10000,end),total,by_level});summary.total+=total;for(const [k,n]of Object.entries(by_level))summary.by_level[k]+=n;
+      }
+      return json(res,200,{service,method,route,window:{start_ms:start,end_ms:end},data_window:{start_ms:start,end_ms:end},bucket_ms:10000,buckets,summary,loading:false,initialized:true,stale:false,updated_at_ms:Date.now(),data_as_of_ms:end,refresh_seconds:15,notices:['预览合成日志，未连接数据库。']});
+    }
     if(url.pathname==='/api/v1/visual/traces'){
       const service=url.searchParams.get('service'),operation=url.searchParams.get('operation')||'';
       if(service==='offline')return json(res,502,{error:'模拟 Jaeger 查询失败'});

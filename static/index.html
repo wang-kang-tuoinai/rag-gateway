@@ -20,14 +20,14 @@
     <div class="sidebar-footer"><span class="small-mark">◈</span><div>从现象到证据<small>日志 · 链路 · 运维知识</small></div></div>
   </aside>
   <main>
-    <header class="topbar"><button class="menu-button" id="menu" aria-label="展开会话列表" aria-expanded="false">☰</button><div><span class="eyebrow">诊断会话</span><h1 id="conversation-title">新建诊断</h1></div><div class="top-actions"><button id="trace-toggle" class="trace-toggle" aria-expanded="false" aria-controls="trace-panel">Trace 面板</button><span class="top-tag">只读观测</span></div></header>
+    <header class="topbar"><button class="menu-button" id="menu" aria-label="展开会话列表" aria-expanded="false">☰</button><div><span class="eyebrow">诊断会话</span><h1 id="conversation-title">新建诊断</h1></div><div class="top-actions"><button id="trace-toggle" class="trace-toggle" aria-expanded="false" aria-controls="trace-panel">观测面板</button><span class="top-tag">只读观测</span></div></header>
     <div class="notice" id="notice" role="status" hidden><span id="notice-text"></span><button class="text-button" id="retry" hidden>重试本次提交</button><button class="text-button" id="check-run" hidden>刷新执行状态</button></div>
     <section class="viewport" id="viewport" aria-label="诊断工作区">
-      <section id="trace-panel" class="trace-panel" aria-label="Trace 入口耗时面板" hidden>
-        <div class="trace-heading"><div><span class="eyebrow">OBSERVE / TRACES</span><h2>请求的变化，一眼可见。</h2><p>从入口耗时与状态分布中选择时间，让 Agent 继续下钻。</p></div><span id="trace-count" class="trace-count">—</span></div>
+      <section id="trace-panel" class="trace-panel" aria-label="日志与链路观测面板" hidden>
+        <div class="trace-heading"><div><span class="eyebrow">OBSERVE / TRACES + LOGS</span><h2>请求的变化，一眼可见。</h2><p>对照入口耗时与日志分布，在任意图表框选时间，让 Agent 继续下钻。</p></div><span id="trace-count" class="trace-count">—</span></div>
         <form id="trace-filter" class="trace-filters">
           <label>服务<select id="trace-service" required><option value="">正在加载服务…</option></select></label>
-          <label id="trace-service-manual-wrap" hidden>手动输入服务<input id="trace-service-manual" placeholder="例如 ops-agent-backend" maxlength="128"></label>
+          <label id="trace-service-manual-wrap" hidden>手动输入服务<input id="trace-service-manual" placeholder="例如 ops-agent-backend" maxlength="64"></label>
           <label>接口<select id="trace-operation"><option value="">全部接口</option></select></label>
           <label>观察窗口<select id="trace-mode"><option value="live">实时 · 最近 15 分钟</option><option value="history">固定历史窗口</option></select></label>
           <button type="submit" class="trace-button">刷新</button>
@@ -43,6 +43,16 @@
           <p id="trace-updated" class="trace-caption"></p>
         </div>
         <p id="trace-notices" class="trace-notices" hidden></p>
+        <div class="trace-chart-card">
+          <div class="trace-chart-head"><strong>日志级别分布 · 每 10 秒</strong><span id="log-count">—</span></div>
+          <div id="log-legend" class="trace-legend log-legend" aria-label="点击切换日志级别显示"></div>
+          <p id="log-state" class="trace-state" role="status">等待查询</p>
+          <canvas id="log-canvas" aria-label="横轴为日志时间，纵轴为日志条数。框选与上方链路图同步；也可使用下方时间输入。" role="img"></canvas>
+          <pre id="log-tooltip" class="trace-tooltip" hidden></pre>
+          <p id="log-updated" class="trace-caption"></p>
+          <p class="trace-caption">点击级别图例可隐藏或显示。灰色区域尚未查询覆盖，不能视为零日志；日志数不是请求数。边缘柱子可能只显示部分宽度，悬停计数属于完整桶范围。</p>
+          <p id="log-notices" class="trace-notices" hidden></p>
+        </div>
         <div class="trace-selection-card"><div class="trace-chart-head"><strong>诊断选区</strong><button type="button" class="text-button" id="trace-select-all">使用整个窗口</button></div>
           <p id="trace-selection">拖动图表框选时间，或在下方输入范围。</p>
           <div class="trace-selection-inputs"><label>开始<input type="datetime-local" id="trace-select-start" step="1"></label><label>结束<input type="datetime-local" id="trace-select-end" step="1"></label><button type="button" id="trace-apply-selection" class="trace-button">填入诊断范围</button><button type="button" id="trace-clear-selection" class="text-button">清除选区</button></div>
